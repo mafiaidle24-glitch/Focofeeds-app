@@ -16,7 +16,6 @@ body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.45 system-ui,-ap
 header{position:sticky;top:0;background:var(--bg);border-bottom:1px solid var(--line);padding:12px 16px;z-index:5;display:flex;justify-content:space-between;align-items:center}
 .logo{font-family:"Bricolage Grotesque",system-ui,sans-serif;font-weight:800;font-size:26px;letter-spacing:-.02em;margin:0}
 
-/* Stories / Status */
 .stories{display:flex;gap:12px;padding:12px 16px;overflow-x:auto;border-bottom:1px solid var(--line);scrollbar-width:none}
 .stories::-webkit-scrollbar{display:none}
 .story-item{display:flex;flex-direction:column;align-items:center;gap:4px;min-width:64px;cursor:pointer;font-size:12px}
@@ -27,7 +26,6 @@ header{position:sticky;top:0;background:var(--bg);border-bottom:1px solid var(--
 .story-modal img,.story-modal video{max-width:100%;max-height:80vh;object-fit:contain}
 .story-top{position:absolute;top:16px;left:16px;right:16px;display:flex;justify-content:space-between;align-items:center;z-index:52}
 
-/* Posts e Feed */
 .post{border-bottom:1px solid var(--line);padding-bottom:12px}
 .repost-tag{padding:8px 16px 0;font-size:13px;color:var(--mute);display:flex;align-items:center;gap:6px;font-weight:600}
 .who{display:flex;align-items:center;gap:10px;padding:12px 16px}
@@ -51,7 +49,6 @@ button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
 .cm input{flex:1;border:1px solid var(--line);background:var(--surface);color:var(--ink);border-radius:20px;padding:8px 14px;font:inherit;min-width:0}
 .cm button{color:var(--accent);font-weight:700}
 
-/* Formulários e Botões */
 .empty{text-align:center;padding:64px 24px;color:var(--mute)}
 .btn{background:var(--accent);color:var(--on-accent);border-radius:10px;padding:12px 18px;font-weight:700;width:100%;text-align:center}
 .btn.alt{background:var(--surface);color:var(--ink)}
@@ -62,7 +59,6 @@ button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
 .drop{display:grid;place-items:center;min-height:140px;border:2px dashed var(--line);border-radius:12px;color:var(--mute);cursor:pointer;text-align:center;padding:16px}
 .drop.has{border:0;padding:0}
 
-/* Perfil e Navegação */
 .prof{padding:20px 16px;display:flex;gap:16px;align-items:center}
 .prof .av{width:72px;height:72px;font-size:28px}
 .stats{display:flex;gap:20px;padding:0 16px 12px}
@@ -342,14 +338,17 @@ $.addEventListener("click",async function(e){
   if(t.id==="pub"){
     var cap=val("cap");
     if(!mediaBlob && !cap){msg="Escreva algo ou escolha uma foto/vídeo.";return formView()}
-    if(busy)return;busy=true;t.disabled=true;t.textContent="Publicando…";
+    if(busy)return; busy=true; t.disabled=true; t.textContent="Publicando…";
     try{
       var url = mediaBlob ? await uploadMedia(mediaBlob, "posts", mediaType) : null;
       var r = await sb.from("posts").insert({user_id:me.id, image:url, media_type:mediaType, caption:cap});
       if(r.error) throw r.error;
-      mediaBlob=null;mediaUrl=null;msg="";await load();view="feed";render();
-    }catch(err){msg="Erro ao publicar. Verifique o tamanho do arquivo.";formView()}
-    busy=false;return;
+      mediaBlob=null; mediaUrl=null; msg=""; await load(); view="feed"; render();
+    }catch(err){
+      msg="Erro ao salvar: " + (err.message || "Tente novamente.");
+      formView();
+    }
+    busy=false; return;
   }
   if(t.id==="pic"){document.getElementById("pfile").click();return}
   if(t.id==="edit"){
@@ -389,7 +388,6 @@ $.addEventListener("change",async function(e){
 $.addEventListener("keydown",function(e){
   if(e.key!=="Enter")return;
   if(e.target.matches(".cm input"))e.target.nextElementSibling.click();
-  if(e.target.id==="pw"||e.target.id==="em")auth();
 });
 
 document.getElementById("story-file").addEventListener("change", async function(e){
