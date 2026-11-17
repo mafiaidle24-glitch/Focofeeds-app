@@ -128,6 +128,10 @@ async function load(){
     posts=await loadPostsSimple();
   } else {
     posts=r.data||[];
+    if(!posts.length){
+      var alt=await loadPostsSimple();
+      if(alt.length){posts=alt;loadErr="Busca completa veio vazia; usando busca simples."}
+    }
   }
 
   var ontem = new Date(Date.now() - 24*60*60*1000).toISOString();
@@ -248,6 +252,7 @@ function feedView(){
   } else {
     html += posts.map(postHtml).join("");
   }
+  html += '<p class="mute" style="text-align:center;font-size:12px;padding:16px">v2 · posts: '+posts.length+' · status: '+stories.length+'</p>';
   $.innerHTML = html;
 }
 
