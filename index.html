@@ -119,16 +119,44 @@ async function setSession(s){
   render();
 }
 
+var loadErr="";
 async function load(){
+  loadErr="";
   var r=await sb.from("posts").select("id,image,media_type,caption,created_at,user_id,repost_of,profiles(name,avatar),likes(user_id),comments(id,body,profiles(name))").order("created_at",{ascending:false}).limit(60);
-  posts=r.data||[];
-  
+  if(r.error){
+    loadErr="Posts: "+r.error.message;
+    posts=await loadPostsSimple();
+  } else {
+    posts=r.data||[];
+  }
+
   var ontem = new Date(Date.now() - 24*60*60*1000).toISOString();
   var st=await sb.from("stories").select("id,media_url,media_type,created_at,user_id,profiles(name,avatar)").gt("created_at", ontem).order("created_at",{ascending:false});
-  stories=st.data||[];
+  if(st.error){loadErr+=" | Status: "+st.error.message;stories=[];}
+  else stories=st.data||[];
 
   var fl=await sb.from("follows").select("following_id").eq("follower_id",me.id);
-  following=(fl.data||[]).map(function(f){return f.following_id});
+  if(fl.error){loadErr+=" | Seguir: "+fl.error.message;following=[];}
+  else following=(fl.data||[]).map(function(f){return f.following_id});
+}
+
+async function loadPostsSimple(){
+  var r=await sb.from("posts").select("*").order("created_at",{ascending:false}).limit(60);
+  if(r.error){loadErr+=" | Posts simples: "+r.error.message;return[]}
+  var list=r.data||[];
+  if(!list.length)return list;
+  var ids=list.map(function(p){return p.id});
+  var uids=[];list.forEach(function(p){if(uids.indexOf(p.user_id)<0)uids.push(p.user_id)});
+  var pr=await sb.from("profiles").select("id,name,avatar").in("id",uids);
+  var lk=await sb.from("likes").select("post_id,user_id").in("post_id",ids);
+  var cm=await sb.from("comments").select("id,post_id,body,user_id").in("post_id",ids);
+  var pm={};(pr.data||[]).forEach(function(p){pm[p.id]=p});
+  list.forEach(function(p){
+    p.profiles=pm[p.user_id]||{name:"?",avatar:null};
+    p.likes=(lk.data||[]).filter(function(l){return l.post_id===p.id});
+    p.comments=(cm.data||[]).filter(function(c){return c.post_id===p.id}).map(function(c){return{id:c.id,body:c.body,profiles:pm[c.user_id]||{name:"?"}}});
+  });
+  return list;
 }
 
 function render(){
@@ -214,6 +242,7 @@ function postHtml(p){
 
 function feedView(){
   var html = storiesHtml();
+  if(loadErr) html += '<p class="msg" style="padding:12px 16px">'+esc(loadErr)+'</p>';
   if(!posts.length){
     html += '<div class="empty"><p>Nada por aqui ainda.</p><button class="btn" data-go="new">Fazer primeira publicação</button></div>';
   } else {
@@ -315,7 +344,7 @@ $.addEventListener("click",async function(e){
       p.likes=has?p.likes.filter(function(l){return l.user_id!==me.id}):p.likes.concat([{user_id:me.id}]);
       feedView();
       if(has) await sb.from("likes").delete().eq("post_id",id).eq("user_id",me.id);
-      else await sb.from("likes").insert({post_id:id});
+      else await sb.from("likes").insert({post_id:id,user_id:me.id});
     }
     if(act==="repost"){
       if(!confirm("Repostar esta publicação no seu perfil?")) return;
@@ -324,7 +353,7 @@ $.addEventListener("click",async function(e){
     }
     if(act==="cm"){
       var i=art.querySelector("input"),v=i.value.trim();if(!v)return;
-      await sb.from("comments").insert({post_id:id,body:v});
+      await sb.from("comments").insert({post_id:id,user_id:me.id,body:v});
       await load(); feedView();
     }
     if(act==="del"){
