@@ -18,9 +18,11 @@ header{position:sticky;top:0;background:var(--bg);border-bottom:1px solid var(--
 
 .stories{display:flex;gap:12px;padding:12px 16px;overflow-x:auto;border-bottom:1px solid var(--line);scrollbar-width:none}
 .stories::-webkit-scrollbar{display:none}
-.story-item{display:flex;flex-direction:column;align-items:center;gap:4px;min-width:64px;cursor:pointer;font-size:12px}
+.story-item{position:relative;display:flex;flex-direction:column;align-items:center;gap:4px;min-width:64px;cursor:pointer;font-size:12px}
 .story-ring{width:60px;height:60px;border-radius:50%;padding:2px;background:linear-gradient(45deg,#f09433,#e6683c,#dc2743,#cc2366,#bc1888)}
 .story-ring.add{background:var(--line)}
+.story-plus{position:absolute;right:2px;top:40px;width:20px;height:20px;border-radius:50%;background:var(--accent);color:var(--on-accent);display:grid;place-items:center;font-size:14px;font-weight:700;border:2px solid var(--bg);line-height:1}
+.story-del{font-size:15px;font-weight:700;color:#fff;background:rgba(255,255,255,.2);border-radius:8px;padding:6px 12px}
 .story-ring .av{width:100%;height:100%;border:2px solid var(--bg)}
 .story-modal{position:fixed;inset:0;background:#000;z-index:50;display:flex;flex-direction:column;justify-content:center;align-items:center;color:#fff}
 .story-modal img,.story-modal video{max-width:100%;max-height:80vh;object-fit:contain}
@@ -181,11 +183,16 @@ function authView(){
 }
 
 function storiesHtml(){
+  var mine=-1;
+  stories.forEach(function(st,idx){if(mine<0&&st.user_id===me.id)mine=idx});
   var html = '<div class="stories">';
-  html += '<div class="story-item" onclick="document.getElementById(\'story-file\').click()">'+
-          '<div class="story-ring add">'+av("＋", P.avatar)+'</div><span>Seu status</span></div>';
-  
+  html += '<div class="story-item" onclick="'+(mine>=0?'openStory('+mine+')':'document.getElementById(\'story-file\').click()')+'">'+
+          '<div class="story-ring'+(mine>=0?'':' add')+'">'+av(P.name, P.avatar)+'</div>'+
+          '<span class="story-plus" onclick="event.stopPropagation();document.getElementById(\'story-file\').click()">+</span>'+
+          '<span>Seu status</span></div>';
+
   stories.forEach(function(st, idx){
+    if(st.user_id===me.id) return;
     var u = st.profiles || {name:"?"};
     html += '<div class="story-item" onclick="openStory('+idx+')">'+
             '<div class="story-ring">'+av(u.name, u.avatar)+'</div><span>'+esc(u.name.split(" ")[0])+'</span></div>';
@@ -198,17 +205,23 @@ function openStory(idx){
   var st = stories[idx];
   if(!st) return;
   var u = st.profiles || {name:"?"};
-  var mediaTag = st.media_type === 'video' 
+  var mediaTag = st.media_type === 'video'
     ? '<video src="'+esc(st.media_url)+'" autoplay controls playsinline></video>'
     : '<img src="'+esc(st.media_url)+'">';
-    
-  document.getElementById("story-overlay").innerHTML = 
+  var del = st.user_id===me.id ? '<button class="story-del" onclick="deleteStory('+st.id+')">Apagar</button>' : '';
+  document.getElementById("story-overlay").innerHTML =
     '<div class="story-modal">'+
-      '<div class="story-top"><b>'+esc(u.name)+' • '+ago(st.created_at)+'</b><button onclick="closeStory()" style="font-size:28px;color:#fff">✕</button></div>'+
+      '<div class="story-top"><b>'+esc(u.name)+' • '+ago(st.created_at)+'</b><div style="display:flex;gap:12px;align-items:center">'+del+'<button onclick="closeStory()" style="font-size:28px;color:#fff">✕</button></div></div>'+
       mediaTag+
     '</div>';
 }
 function closeStory(){ document.getElementById("story-overlay").innerHTML = ""; }
+async function deleteStory(id){
+  if(!confirm("Apagar este status?")) return;
+  var r=await sb.from("stories").delete().eq("id",id);
+  if(r.error){alert("Erro ao apagar: "+r.error.message);return}
+  closeStory(); await load(); feedView();
+}
 
 function postHtml(p){
   var orig = p.repost_of ? posts.find(function(x){return x.id === p.repost_of}) : null;
