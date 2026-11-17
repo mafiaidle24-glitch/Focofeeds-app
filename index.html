@@ -81,6 +81,8 @@ nav button{position:relative}
 .badge[hidden]{display:none}
 .conv{display:flex;gap:12px;align-items:center;padding:12px 16px;border-bottom:1px solid var(--line);cursor:pointer}
 .conv .grow{flex:1;min-width:0}
+.conv.new{background:var(--surface)}
+.thumb{width:44px;height:44px;object-fit:cover;border-radius:6px;flex:none}
 .conv .last{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--mute);font-size:14px}
 .conv.unread .last{color:var(--ink);font-weight:700}
 .dot{width:10px;height:10px;border-radius:50%;background:var(--accent);flex:none}
@@ -94,7 +96,7 @@ nav button{position:relative}
 </head>
 <body>
 <div class="app">
-  <header><h1 class="logo">Foco</h1></header>
+  <header><h1 class="logo">Foco</h1><div style="display:flex;gap:2px;align-items:center"><button id="sbtn" aria-label="Buscar pessoas" style="display:none;font-size:20px;padding:4px 6px">🔍</button><button id="bell" aria-label="Notificações" style="display:none;position:relative;font-size:22px;padding:4px 6px">🔔<b class="badge" id="bbadge" hidden style="top:-2px;left:auto;right:-4px"></b></button></div></header>
   <main id="main"><div class="empty">Carregando…</div></main>
 </div>
 <div id="story-overlay"></div>
@@ -112,7 +114,7 @@ var sb=supabase.createClient("https://zizvfbospppvwlldzwjz.supabase.co","sb_publ
 var me=null,P=null,posts=[],stories=[],following=[],view="feed",mode="in",msg="",ok=false,mediaBlob=null,mediaUrl=null,mediaType="image",busy=false;
 var $=document.getElementById("main");
 var feedTab="all",viewUid=null;
-var convs=[],unreadTotal=0,msgErr="",chatUid=null,chatPeer=null,chatMsgs=[],chan=null;
+var searchQ="",searchTimer=null,searchTok=0,notifUnread=0,convs=[],unreadTotal=0,msgErr="",chatUid=null,chatPeer=null,chatMsgs=[],chan=null;
 
 function esc(s){return String(s==null?"":s).replace(/[&<>"]/g,function(c){return{"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]})}
 function ini(n){return esc((n||"?").trim().charAt(0).toUpperCase())}
@@ -135,8 +137,9 @@ async function setSession(s){
     P=r.data||{id:me.id,name:"Novo usuário",bio:"",avatar:null};
     await load();
     await loadConvs();
+    await loadNotifCount();
     subscribeMsgs();
-  } else { unsubscribeMsgs(); updateBadge(); }
+  } else { unsubscribeMsgs(); updateBadge(); notifUnread=0; updateNotifBadge(); }
   render();
 }
 
@@ -186,12 +189,16 @@ async function loadPostsSimple(){
 
 function render(){
   var nav=document.querySelector("nav");nav.style.display=me?"":"none";
+  document.getElementById("bell").style.display=me?"":"none";
+  document.getElementById("sbtn").style.display=me?"":"none";
   if(!me)return authView();
   nav.querySelectorAll("button").forEach(function(b){b.classList.toggle("on",b.dataset.v===(view==="chat"?"msg":view))});
   if(view==="feed")return feedView();
   if(view==="new")return formView();
   if(view==="user")return userView();
   if(view==="msg")return msgView();
+  if(view==="notif")return notifView();
+  if(view==="search")return searchView();
   if(view==="chat")return chatView();
   profView();
 }
@@ -377,7 +384,7 @@ async function loadConvs(){
 }
 function subscribeMsgs(){
   unsubscribeMsgs();
-  chan=sb.channel("msgs-"+me.id).on("postgres_changes",{event:"INSERT",schema:"public",table:"messages"},function(pl){onNewMsg(pl.new)}).subscribe();
+  chan=sb.channel("msgs-"+me.id).on("postgres_changes",{event:"INSERT",schema:"public",table:"messages"},function(pl){onNewMsg(pl.new)}).on("postgres_changes",{event:"INSERT",schema:"public",table:"notifications"},function(){onNewNotif()}).subscribe();
 }
 function unsubscribeMsgs(){if(chan){sb.removeChannel(chan);chan=null}}
 function onNewMsg(m){
@@ -454,6 +461,77 @@ async function sendMsg(){
   addMsg(r.data);inp.focus();
 }
 
+function updateNotifBadge(){
+  var b=document.getElementById("bbadge");if(!b)return;
+  b.hidden=!notifUnread;b.textContent=notifUnread>9?"9+":notifUnread;
+}
+async function loadNotifCount(){
+  var r=await sb.from("notifications").select("*",{count:"exact",head:true}).eq("user_id",me.id).is("read_at",null);
+  notifUnread=r.error?0:(r.count||0);
+  updateNotifBadge();
+}
+function onNewNotif(){
+  if(!me)return;
+  if(view==="notif")notifView(); else loadNotifCount();
+}
+var NTXT={like:"curtiu sua publicação.",comment:"comentou na sua publicação.",follow:"começou a seguir você.",repost:"repostou sua publicação."};
+async function notifView(){
+  $.innerHTML='<div class="empty">Carregando…</div>';
+  var r=await sb.from("notifications").select("id,type,post_id,actor_id,created_at,read_at").eq("user_id",me.id).order("created_at",{ascending:false}).limit(50);
+  if(view!=="notif")return;
+  if(r.error){$.innerHTML='<p class="msg" style="padding:12px 16px">'+esc(r.error.message)+'</p>';return}
+  var list=r.data||[],aids=[],pids=[];
+  list.forEach(function(n){
+    if(aids.indexOf(n.actor_id)<0)aids.push(n.actor_id);
+    if(n.post_id&&pids.indexOf(n.post_id)<0)pids.push(n.post_id);
+  });
+  var pm={},qm={};
+  if(aids.length){var pr=await sb.from("profiles").select("id,name,avatar").in("id",aids);(pr.data||[]).forEach(function(p){pm[p.id]=p})}
+  if(pids.length){var ps=await sb.from("posts").select("id,image,media_type").in("id",pids);(ps.data||[]).forEach(function(p){qm[p.id]=p})}
+  if(view!=="notif")return;
+  var html='<div style="padding:14px 16px 6px"><b style="font-size:18px">Notificações</b></div>';
+  if(!list.length){
+    html+='<div class="empty"><p>Nenhuma notificação ainda.</p><p>Curtidas, comentários, reposts e novos seguidores aparecem aqui.</p></div>';
+  } else {
+    html+=list.map(function(n){
+      var a=pm[n.actor_id]||{name:"Alguém",avatar:null},p=n.post_id?qm[n.post_id]:null;
+      var th=(p&&p.image&&p.media_type!=="video")?'<img class="thumb" src="'+esc(p.image)+'" alt="">':'';
+      return '<div class="conv'+(n.read_at?'':' new')+'" data-u="'+n.actor_id+'">'+av(a.name,a.avatar)+
+        '<div class="grow"><b>'+esc(a.name)+'</b> '+(NTXT[n.type]||"interagiu com você.")+' <small class="mute" style="display:inline">'+ago(n.created_at)+'</small></div>'+th+'</div>';
+    }).join("");
+  }
+  $.innerHTML=html;
+  if(list.some(function(n){return !n.read_at})){
+    await sb.from("notifications").update({read_at:new Date().toISOString()}).eq("user_id",me.id).is("read_at",null);
+  }
+  notifUnread=0;updateNotifBadge();
+}
+
+function searchView(){
+  $.innerHTML='<div class="form" style="padding-bottom:4px"><input id="sq" type="search" placeholder="Buscar pessoas (@nome ou nome)" autocomplete="off" value="'+esc(searchQ)+'"></div><div id="sres"></div>';
+  runSearch();
+  var i=document.getElementById("sq");if(i)i.focus();
+}
+async function runSearch(){
+  var tok=++searchTok;
+  var q=searchQ.replace(/^\s*@+/,"").replace(/[%_]/g,"").trim();
+  var qb=sb.from("profiles").select("id,name,bio,avatar").neq("id",me.id).order("name").limit(20);
+  if(q) qb=qb.ilike("name","%"+q+"%");
+  var r=await qb;
+  if(tok!==searchTok||view!=="search")return;
+  var box=document.getElementById("sres");if(!box)return;
+  if(r.error){box.innerHTML='<p class="msg" style="padding:12px 16px">'+esc(r.error.message)+'</p>';return}
+  var list=r.data||[];
+  var head='<div style="padding:8px 16px;color:var(--mute);font-size:13px;font-weight:700">'+(q?'Resultados':'Pessoas no Foco')+'</div>';
+  if(!list.length){box.innerHTML=head+'<div class="empty">Ninguém encontrado'+(q?' para "'+esc(q)+'"':'')+'.</div>';return}
+  box.innerHTML=head+list.map(function(p){
+    var f=following.indexOf(p.id)>=0;
+    return '<div class="conv" data-u="'+p.id+'">'+av(p.name,p.avatar)+
+      '<div class="grow"><b>'+esc(p.name)+'</b><div class="last">'+esc(p.bio||"")+'</div></div>'+
+      (f?'<small class="mute">Seguindo</small>':'')+'</div>';
+  }).join("");
+}
+
 function shrinkImage(file, cb){
   var r = new FileReader();
   r.onload = function(e){
@@ -482,6 +560,8 @@ async function uploadMedia(fileOrBlob, folder, type){
   return sb.storage.from("fotos").getPublicUrl(path).data.publicUrl;
 }
 
+document.getElementById("bell").addEventListener("click",function(){view="notif";render();window.scrollTo(0,0)});
+document.getElementById("sbtn").addEventListener("click",function(){view="search";render();window.scrollTo(0,0)});
 document.querySelector("nav").addEventListener("click",function(e){var b=e.target.closest("button");if(b){view=b.dataset.v;msg="";render();window.scrollTo(0,0)}});
 
 $.addEventListener("click",async function(e){
@@ -606,6 +686,10 @@ $.addEventListener("change",async function(e){
       }catch(err){alert("Erro ao enviar foto.")}
     });
   }
+});
+
+$.addEventListener("input",function(e){
+  if(e.target.id==="sq"){searchQ=e.target.value;clearTimeout(searchTimer);searchTimer=setTimeout(runSearch,250)}
 });
 
 $.addEventListener("keydown",function(e){
