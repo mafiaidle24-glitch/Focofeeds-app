@@ -76,6 +76,20 @@ nav div{display:flex;width:100%;max-width:480px}
 nav button{flex:1;padding:12px 0 10px;font-size:12px;color:var(--mute);display:grid;justify-items:center;gap:2px}
 nav button span{font-size:24px;line-height:1}
 nav button.on{color:var(--accent);font-weight:700}
+nav button{position:relative}
+.badge{position:absolute;top:4px;left:calc(50% + 6px);background:var(--like);color:#fff;border-radius:10px;font-size:11px;min-width:18px;height:18px;display:grid;place-items:center;padding:0 4px;font-weight:700}
+.badge[hidden]{display:none}
+.conv{display:flex;gap:12px;align-items:center;padding:12px 16px;border-bottom:1px solid var(--line);cursor:pointer}
+.conv .grow{flex:1;min-width:0}
+.conv .last{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--mute);font-size:14px}
+.conv.unread .last{color:var(--ink);font-weight:700}
+.dot{width:10px;height:10px;border-radius:50%;background:var(--accent);flex:none}
+.ml{display:flex;flex-direction:column;padding:8px 0;min-height:45vh}
+.bub{max-width:78%;padding:8px 12px;border-radius:16px;margin:3px 12px;white-space:pre-wrap;overflow-wrap:anywhere}
+.bub.me{margin-left:auto;background:var(--accent);color:var(--on-accent)}
+.bub.them{margin-right:auto;background:var(--surface)}
+.chat-in{position:sticky;bottom:70px;display:flex;gap:8px;padding:10px 16px;background:var(--bg);border-top:1px solid var(--line)}
+.chat-in input{flex:1;min-width:0;border:1px solid var(--line);background:var(--surface);color:var(--ink);border-radius:20px;padding:10px 14px;font:inherit}
 </style>
 </head>
 <body>
@@ -89,6 +103,7 @@ nav button.on{color:var(--accent);font-weight:700}
 <nav style="display:none"><div>
   <button data-v="feed" aria-label="Início"><span>⌂</span>Início</button>
   <button data-v="new" aria-label="Nova publicação"><span>＋</span>Publicar</button>
+  <button data-v="msg" aria-label="Mensagens"><span>✉</span>Mensagens<b class="badge" id="nbadge" hidden></b></button>
   <button data-v="prof" aria-label="Perfil"><span>☺</span>Perfil</button>
 </div></nav>
 
@@ -96,6 +111,8 @@ nav button.on{color:var(--accent);font-weight:700}
 var sb=supabase.createClient("https://zizvfbospppvwlldzwjz.supabase.co","sb_publishable_IkHRvoT4SwkJw2lZNQEU2A_z6ukZ0bM");
 var me=null,P=null,posts=[],stories=[],following=[],view="feed",mode="in",msg="",ok=false,mediaBlob=null,mediaUrl=null,mediaType="image",busy=false;
 var $=document.getElementById("main");
+var feedTab="all",viewUid=null;
+var convs=[],unreadTotal=0,msgErr="",chatUid=null,chatPeer=null,chatMsgs=[],chan=null;
 
 function esc(s){return String(s==null?"":s).replace(/[&<>"]/g,function(c){return{"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]})}
 function ini(n){return esc((n||"?").trim().charAt(0).toUpperCase())}
@@ -112,12 +129,14 @@ function tr(m){m=String(m||"");
   return"Algo deu errado. Tente de novo."}
 
 async function setSession(s){
-  me=s?s.user:null;P=null;posts=[];stories=[];following=[];
+  me=s?s.user:null;P=null;posts=[];stories=[];following=[];convs=[];unreadTotal=0;
   if(me){
     var r=await sb.from("profiles").select("*").eq("id",me.id).maybeSingle();
     P=r.data||{id:me.id,name:"Novo usuário",bio:"",avatar:null};
     await load();
-  }
+    await loadConvs();
+    subscribeMsgs();
+  } else { unsubscribeMsgs(); updateBadge(); }
   render();
 }
 
@@ -168,9 +187,12 @@ async function loadPostsSimple(){
 function render(){
   var nav=document.querySelector("nav");nav.style.display=me?"":"none";
   if(!me)return authView();
-  nav.querySelectorAll("button").forEach(function(b){b.classList.toggle("on",b.dataset.v===view)});
+  nav.querySelectorAll("button").forEach(function(b){b.classList.toggle("on",b.dataset.v===(view==="chat"?"msg":view))});
   if(view==="feed")return feedView();
   if(view==="new")return formView();
+  if(view==="user")return userView();
+  if(view==="msg")return msgView();
+  if(view==="chat")return chatView();
   profView();
 }
 
@@ -241,8 +263,8 @@ function postHtml(p){
 
   return '<article class="post" data-id="'+target.id+'" data-real-id="'+p.id+'">'+
     (repUser ? '<div class="repost-tag">🔁 Repostado por '+esc(repUser.name)+'</div>' : '')+
-    '<div class="who">'+av(a.name,a.avatar)+
-      '<div class="grow"><b>'+esc(a.name)+'</b><small>'+ago(target.created_at)+'</small></div>'+
+    '<div class="who">'+
+      '<div class="grow" data-u="'+target.user_id+'" style="display:flex;align-items:center;gap:10px;cursor:pointer">'+av(a.name,a.avatar)+'<div><b>'+esc(a.name)+'</b><small>'+ago(target.created_at)+'</small></div></div>'+
       (target.user_id !== me.id ? '<button class="follow-btn '+(isFollowing?'following':'')+'" data-a="follow" data-uid="'+target.user_id+'">'+(isFollowing?'Seguindo':'Seguir')+'</button>' : '')+
       (p.user_id===me.id ? '<button class="mute" data-a="del" style="margin-left:8px">Apagar</button>' : '')+
     '</div>'+
@@ -260,12 +282,15 @@ function postHtml(p){
 function feedView(){
   var html = storiesHtml();
   if(loadErr) html += '<p class="msg" style="padding:12px 16px">'+esc(loadErr)+'</p>';
-  if(!posts.length){
-    html += '<div class="empty"><p>Nada por aqui ainda.</p><button class="btn" data-go="new">Fazer primeira publicação</button></div>';
+  html += '<div class="tabs"><button data-ft="all" class="'+(feedTab==="all"?"on":"")+'">Para você</button><button data-ft="fol" class="'+(feedTab==="fol"?"on":"")+'">Seguindo</button></div>';
+  var list = feedTab==="fol" ? posts.filter(function(p){return following.indexOf(p.user_id)>=0 || p.user_id===me.id}) : posts;
+  if(!list.length){
+    html += feedTab==="fol"
+      ? '<div class="empty"><p>Nada por aqui ainda.</p><p>Siga pessoas na aba "Para você" para ver as publicações delas aqui.</p></div>'
+      : '<div class="empty"><p>Nada por aqui ainda.</p><button class="btn" data-go="new">Fazer primeira publicação</button></div>';
   } else {
-    html += posts.map(postHtml).join("");
+    html += list.map(postHtml).join("");
   }
-  html += '<p class="mute" style="text-align:center;font-size:12px;padding:16px">v3 · posts: '+posts.length+' · status: '+stories.length+'</p>';
   $.innerHTML = html;
 }
 
@@ -284,14 +309,149 @@ function formView(){
 }
 
 function profView(){
+  countFollows("following_id",me.id).then(function(n){var e=document.getElementById("mfl");if(e)e.textContent=n});
   var mine=posts.filter(function(p){return p.user_id===me.id && !p.repost_of});
   $.innerHTML='<div class="prof">'+av(P.name,P.avatar)+'<div><b>'+esc(P.name)+'</b><div class="mute">'+esc(P.bio||"Sem bio ainda")+'</div></div></div>'+
-  '<div class="stats"><span><b>'+mine.length+'</b> posts</span><span><b>'+following.length+'</b> seguindo</span></div>'+
+  '<div class="stats"><span><b>'+mine.length+'</b> posts</span><span><b id="mfl">–</b> seguidores</span><span><b>'+following.length+'</b> seguindo</span></div>'+
   '<div class="form" style="padding-top:0"><button class="btn" id="pic">Alterar foto de perfil</button><input id="pfile" type="file" accept="image/*" hidden><button class="btn alt" id="edit">Editar nome e bio</button><button class="btn alt" id="out">Sair da conta</button></div>'+
   (mine.length?'<div class="grid">'+mine.map(function(p){
     if(!p.image) return '<div style="background:var(--surface);padding:8px;font-size:12px;aspect-ratio:1;overflow:hidden">'+esc(p.caption)+'</div>';
     return p.media_type==='video' ? '<video src="'+esc(p.image)+'"></video>' : '<img src="'+esc(p.image)+'">';
   }).join("")+'</div>':'<div class="empty">Suas publicações aparecerão aqui.</div>');
+}
+
+function countFollows(col,uid){
+  return sb.from("follows").select("*",{count:"exact",head:true}).eq(col,uid).then(function(r){return r.count||0});
+}
+function gridHtml(list){
+  if(!list.length) return '<div class="empty">Nenhuma publicação ainda.</div>';
+  return '<div class="grid">'+list.map(function(p){
+    if(!p.image) return '<div style="background:var(--surface);padding:8px;font-size:12px;aspect-ratio:1;overflow:hidden">'+esc(p.caption)+'</div>';
+    return p.media_type==='video' ? '<video src="'+esc(p.image)+'"></video>' : '<img src="'+esc(p.image)+'">';
+  }).join("")+'</div>';
+}
+function openUser(uid){
+  if(uid===me.id){view="prof";render();window.scrollTo(0,0);return}
+  view="user";viewUid=uid;render();window.scrollTo(0,0);
+}
+async function userView(){
+  var uid=viewUid;
+  $.innerHTML='<div class="empty">Carregando…</div>';
+  var back='<div style="padding:8px 16px 0"><button data-go="feed" class="mute" style="font-weight:700">← Voltar</button></div>';
+  var pr=await sb.from("profiles").select("id,name,bio,avatar").eq("id",uid).maybeSingle();
+  var ps=await sb.from("posts").select("id,image,media_type,caption").eq("user_id",uid).is("repost_of",null).order("created_at",{ascending:false}).limit(60);
+  var seg=await countFollows("following_id",uid);
+  var sgd=await countFollows("follower_id",uid);
+  if(view!=="user"||viewUid!==uid) return;
+  var u=pr.data;
+  if(!u){$.innerHTML=back+'<div class="empty">Perfil não encontrado.</div>';return}
+  var list=ps.data||[], isF=following.indexOf(uid)>=0;
+  $.innerHTML=back+
+    '<div class="prof">'+av(u.name,u.avatar)+'<div><b>'+esc(u.name)+'</b><div class="mute">'+esc(u.bio||"Sem bio ainda")+'</div></div></div>'+
+    '<div class="stats"><span><b>'+list.length+'</b> posts</span><span><b>'+seg+'</b> seguidores</span><span><b>'+sgd+'</b> seguindo</span></div>'+
+    '<div class="form" style="padding-top:0"><button class="btn'+(isF?' alt':'')+'" data-uf="'+uid+'">'+(isF?'Seguindo':'Seguir')+'</button><button class="btn alt" data-chat="'+uid+'">Mensagem</button></div>'+
+    gridHtml(list);
+}
+
+function updateBadge(){
+  var b=document.getElementById("nbadge");if(!b)return;
+  b.hidden=!unreadTotal;b.textContent=unreadTotal>9?"9+":unreadTotal;
+}
+async function loadConvs(){
+  msgErr="";
+  var r=await sb.from("messages").select("id,sender_id,receiver_id,body,created_at,read_at").or("sender_id.eq."+me.id+",receiver_id.eq."+me.id).order("created_at",{ascending:false}).limit(300);
+  if(r.error){msgErr=r.error.message;convs=[];unreadTotal=0;updateBadge();return}
+  var map={},order=[];unreadTotal=0;
+  (r.data||[]).forEach(function(m){
+    var peer=m.sender_id===me.id?m.receiver_id:m.sender_id;
+    if(!map[peer]){map[peer]={uid:peer,last:m.body,at:m.created_at,mine:m.sender_id===me.id,unread:0};order.push(peer)}
+    if(m.receiver_id===me.id&&!m.read_at){map[peer].unread++;unreadTotal++}
+  });
+  var pm={};
+  if(order.length){
+    var pr=await sb.from("profiles").select("id,name,avatar").in("id",order);
+    (pr.data||[]).forEach(function(p){pm[p.id]=p});
+  }
+  convs=order.map(function(id){var c=map[id],p=pm[id]||{};c.name=p.name||"?";c.avatar=p.avatar||null;return c});
+  updateBadge();
+}
+function subscribeMsgs(){
+  unsubscribeMsgs();
+  chan=sb.channel("msgs-"+me.id).on("postgres_changes",{event:"INSERT",schema:"public",table:"messages"},function(pl){onNewMsg(pl.new)}).subscribe();
+}
+function unsubscribeMsgs(){if(chan){sb.removeChannel(chan);chan=null}}
+function onNewMsg(m){
+  if(!me||(m.sender_id!==me.id&&m.receiver_id!==me.id))return;
+  var peer=m.sender_id===me.id?m.receiver_id:m.sender_id;
+  if(view==="chat"&&chatUid===peer){
+    addMsg(m);
+    if(m.receiver_id===me.id)markRead(peer);
+    return;
+  }
+  loadConvs().then(function(){if(view==="msg")drawInbox()});
+}
+async function msgView(){
+  $.innerHTML='<div class="empty">Carregando…</div>';
+  await loadConvs();
+  if(view!=="msg")return;
+  drawInbox();
+}
+function drawInbox(){
+  var html='';
+  if(msgErr) html+='<p class="msg" style="padding:12px 16px">'+esc(msgErr)+'</p>';
+  if(!convs.length){
+    html+='<div class="empty"><p>Nenhuma conversa ainda.</p><p>Abra o perfil de alguém e toque em "Mensagem".</p></div>';
+  } else {
+    html+=convs.map(function(c){
+      return '<div class="conv'+(c.unread?' unread':'')+'" data-chat="'+c.uid+'">'+av(c.name,c.avatar)+
+        '<div class="grow"><b>'+esc(c.name)+'</b><div class="last">'+(c.mine?'Você: ':'')+esc(c.last)+'</div></div>'+
+        '<small class="mute">'+ago(c.at)+'</small>'+(c.unread?'<span class="dot"></span>':'')+'</div>';
+    }).join("");
+  }
+  $.innerHTML=html;
+}
+function openChat(uid){
+  if(uid===me.id)return;
+  view="chat";chatUid=uid;render();window.scrollTo(0,0);
+}
+async function chatView(){
+  var uid=chatUid;
+  $.innerHTML='<div class="empty">Carregando…</div>';
+  var pr=await sb.from("profiles").select("id,name,avatar").eq("id",uid).maybeSingle();
+  var r=await sb.from("messages").select("id,sender_id,receiver_id,body,created_at,read_at").or("and(sender_id.eq."+me.id+",receiver_id.eq."+uid+"),and(sender_id.eq."+uid+",receiver_id.eq."+me.id+")").order("created_at",{ascending:true}).limit(200);
+  if(view!=="chat"||chatUid!==uid)return;
+  chatPeer=pr.data||{id:uid,name:"?",avatar:null};
+  chatMsgs=r.data||[];
+  $.innerHTML='<div class="who" style="border-bottom:1px solid var(--line)"><button data-go="msg" class="mute" style="font-size:22px;padding:0 4px">←</button>'+
+    '<div class="grow" data-u="'+uid+'" style="display:flex;align-items:center;gap:10px;cursor:pointer">'+av(chatPeer.name,chatPeer.avatar)+'<b>'+esc(chatPeer.name)+'</b></div></div>'+
+    '<div class="ml" id="ml"></div>'+
+    (r.error?'<p class="msg" style="padding:0 16px">'+esc(r.error.message)+'</p>':'')+
+    '<div class="chat-in"><input id="mi" type="text" placeholder="Mensagem…" autocomplete="off"><button class="btn" data-send onmousedown="event.preventDefault()" style="width:auto;padding:10px 16px">Enviar</button></div>';
+  fillMsgs();
+  markRead(uid);
+}
+function fillMsgs(){
+  var ml=document.getElementById("ml");if(!ml)return;
+  ml.innerHTML=chatMsgs.length
+    ? chatMsgs.map(function(m){return '<div class="bub '+(m.sender_id===me.id?'me':'them')+'">'+esc(m.body)+'</div>'}).join("")
+    : '<div class="empty">Diga olá 👋</div>';
+  window.scrollTo(0,document.body.scrollHeight);
+}
+function addMsg(m){
+  if(chatMsgs.some(function(x){return x.id===m.id}))return;
+  chatMsgs.push(m);fillMsgs();
+}
+async function markRead(uid){
+  await sb.from("messages").update({read_at:new Date().toISOString()}).eq("receiver_id",me.id).eq("sender_id",uid).is("read_at",null);
+  loadConvs();
+}
+async function sendMsg(){
+  var inp=document.getElementById("mi");if(!inp||!chatUid)return;
+  var body=inp.value.trim();if(!body)return;
+  inp.value="";
+  var r=await sb.from("messages").insert({sender_id:me.id,receiver_id:chatUid,body:body}).select().single();
+  if(r.error){alert("Erro ao enviar: "+r.error.message);inp.value=body;return}
+  addMsg(r.data);inp.focus();
 }
 
 function shrinkImage(file, cb){
@@ -327,7 +487,23 @@ document.querySelector("nav").addEventListener("click",function(e){var b=e.targe
 $.addEventListener("click",async function(e){
   var t=e.target;
   var m=t.closest("[data-m]");if(m){mode=m.dataset.m;msg="";authView();return}
-  var g=t.closest("[data-go]");if(g){view=g.dataset.go;render();return}
+  var g=t.closest("[data-go]");if(g){view=g.dataset.go;render();window.scrollTo(0,0);return}
+  var ft=t.closest("[data-ft]");if(ft){feedTab=ft.dataset.ft;feedView();return}
+  var uf=t.closest("[data-uf]");
+  if(uf){
+    var fid=uf.dataset.uf;
+    if(following.indexOf(fid)>=0){
+      following=following.filter(function(x){return x!==fid});
+      await sb.from("follows").delete().eq("follower_id",me.id).eq("following_id",fid);
+    } else {
+      following.push(fid);
+      await sb.from("follows").insert({follower_id:me.id,following_id:fid});
+    }
+    userView();return;
+  }
+  var uo=t.closest("[data-u]");if(uo){openUser(uo.dataset.u);return}
+  var ch=t.closest("[data-chat]");if(ch){openChat(ch.dataset.chat);return}
+  if(t.closest("[data-send]")){sendMsg();return}
   if(t.id==="go"){
     var em=val("em"),pw=val("pw");
     if(!em||!pw){msg="Preencha e-mail e senha.";ok=false;return authView()}
@@ -435,6 +611,7 @@ $.addEventListener("change",async function(e){
 $.addEventListener("keydown",function(e){
   if(e.key!=="Enter")return;
   if(e.target.matches(".cm input"))e.target.nextElementSibling.click();
+  if(e.target.id==="mi")sendMsg();
 });
 
 document.getElementById("story-file").addEventListener("change", async function(e){
