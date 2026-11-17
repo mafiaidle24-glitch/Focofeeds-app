@@ -157,7 +157,7 @@ function tr(m){m=String(m||"");
   if(/different from the old/i.test(m))return"A nova senha precisa ser diferente da atual.";
   if(/session missing|expired|token/i.test(m))return"O link expirou. Peça um novo em Esqueci minha senha.";
   if(/valid email|invalid/i.test(m))return"Digite um e-mail válido.";
-  return"Algo deu errado. Tente de novo."}
+  return"Algo deu errado"+(m?": "+m:".")+" Tente de novo."}
 
 async function setSession(s){
   me=s?s.user:null;P=null;posts=[];stories=[];following=[];convs=[];unreadTotal=0;
@@ -252,7 +252,11 @@ function forgotView(){
     '<p class="mute" style="margin:0">Digite seu e-mail e enviaremos um link para criar uma nova senha.</p>'+
     '<input id="em" type="email" placeholder="E-mail" autocomplete="email">'+
     (msg?'<p class="msg'+(ok?' ok':'')+'">'+esc(msg)+'</p>':'')+
-    '<button class="btn" id="sendrec">Enviar link</button><button class="btn alt" data-m="in">Voltar</button></div>';
+    '<button class="btn" id="sendrec">Enviar link e código</button>'+
+    '<p class="mute" style="margin:8px 0 0;font-size:14px">Se o link do e-mail não funcionar, digite aqui o código de 6 dígitos que veio no e-mail:</p>'+
+    '<input id="rc" type="text" inputmode="numeric" maxlength="8" placeholder="Código do e-mail" autocomplete="one-time-code">'+
+    '<button class="btn alt" id="verrec">Entrar com o código</button>'+
+    '<button class="btn alt" data-m="in">Voltar</button></div>';
 }
 function passView(){
   $.innerHTML='<div class="form"><b style="font-size:18px">'+(recovering?'Criar nova senha':'Alterar senha')+'</b>'+
@@ -918,6 +922,14 @@ $.addEventListener("click",async function(e){
     if(rr.error){msg=tr(rr.error.message);ok=false}
     else{msg="Se este e-mail tiver conta, enviamos o link. Confira também a caixa de spam.";ok=true}
     return forgotView();
+  }
+  if(t.id==="verrec"){
+    var em3=val("em"),cd=val("rc").replace(/\s/g,"");
+    if(!em3||!cd){msg="Digite o e-mail e o código recebido.";ok=false;return forgotView()}
+    t.disabled=true;recovering=true;
+    var vr=await sb.auth.verifyOtp({email:em3,token:cd,type:"recovery"});
+    if(vr.error){recovering=false;msg=tr(vr.error.message);ok=false;return forgotView()}
+    msg="";ok=false;return;
   }
   if(t.id==="savepw"){
     var p1=val("np"),p2=val("np2");
