@@ -122,7 +122,7 @@ async function setSession(s){
 var loadErr="";
 async function load(){
   loadErr="";
-  var r=await sb.from("posts").select("id,image,media_type,caption,created_at,user_id,repost_of,profiles(name,avatar),likes(user_id),comments(id,body,profiles(name))").order("created_at",{ascending:false}).limit(60);
+  var r=await sb.from("posts").select("id,image,media_type,caption,created_at,user_id,repost_of,profiles!posts_user_id_fkey(name,avatar),likes(user_id),comments(id,body,profiles!comments_user_id_fkey(name))").order("created_at",{ascending:false}).limit(60);
   if(r.error){
     loadErr="Posts: "+r.error.message;
     posts=await loadPostsSimple();
@@ -252,7 +252,7 @@ function feedView(){
   } else {
     html += posts.map(postHtml).join("");
   }
-  html += '<p class="mute" style="text-align:center;font-size:12px;padding:16px">v2 · posts: '+posts.length+' · status: '+stories.length+'</p>';
+  html += '<p class="mute" style="text-align:center;font-size:12px;padding:16px">v3 · posts: '+posts.length+' · status: '+stories.length+'</p>';
   $.innerHTML = html;
 }
 
